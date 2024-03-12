@@ -36,6 +36,12 @@ enum editorkey {
 	PAGE_DOWN
 };
 
+enum editorHighlight {
+	HL_NORMAL = 0,
+	HL_NUMBER,
+	HL_MATCH
+};
+
 /*** data ***/
 
 // creating a datatype that represents a row in the editor
@@ -48,6 +54,8 @@ typedef struct erow {
 	char *chars;
 	// storing the actual characters to be displayed
 	char *render;
+	// stores highlighting of the row
+	unsigned char *hl;
 } erow;
 
 // creating a global editor datatype
@@ -215,6 +223,32 @@ int getWindowSize(int *rows, int *cols) {
 	}
 }
 
+/*** syntax highlighting ***/
+
+// function that assigns highlight value to all row chars
+void editorUpdateSyntax(erow *row) {
+	// makes a length copy of row and populates each char index with color
+	row->hl = realloc(row->hl, row->rsize);
+	memset(row->hl, HL_NORMAL, row->rsize);
+
+	// iterates through chars in row and assigns all digits a color index
+	int i;
+	for (i = 0; i < row->rsize; i++) {
+		if (isdigit(row->render[i])) {
+			row->hl[i] = HL_NUMBER;
+		}
+	}
+}
+
+// function that maps hl values to color codes
+int editorSyntaxToColor(int hl) {
+	switch (hl) {
+		case HL_NUMBER: return 31;
+		case HL_MATCH: return 34;
+		default: return 37;
+	}
+}
+
 /*** row operations ***/
 
 // function that converts chars index to render index
@@ -273,6 +307,8 @@ void editorUpdateRow(erow *row) {
 	}
 	row->render[idx] = '\0';
 	row->rsize = idx;
+
+	editorUpdateSyntax(row);
 }
 
 // function that adds a row with inputted data
@@ -291,6 +327,7 @@ void editorInsertRow(int at, char *s, size_t len) {
 
 	E.row[at].rsize = 0;
 	E.row[at].render = NULL;
+	E.row[at].hl = NULL;
 	editorUpdateRow(&E.row[at]);
 
 	E.numrows++;
@@ -301,6 +338,7 @@ void editorInsertRow(int at, char *s, size_t len) {
 void editorFreeRow(erow *row) {
 	free(row->render);
 	free(row->chars);
+	free(row->hl);
 }
 
 // function to delete a row
@@ -490,6 +528,16 @@ void editorFindCallback(char *query, int key) {
 	static int last_match = -1;
 	static int direction = 1;
 
+	static int saved_hl_line;
+	static char *saved_hl = NULL;
+
+	// restores coloring
+	if (saved_hl) {
+		memcpy(E.row[saved_hl_line].hl, saved_hl, E.row[saved_hl_line].rsize);
+		free(saved_hl);
+		saved_hl = NULL;
+	}
+
 	if (key == '\r' || key == '\x1b') {
 		last_match = -1;
 		direction = 1;
@@ -525,6 +573,14 @@ void editorFindCallback(char *query, int key) {
 			E.cy = current;
 			E.cx = editorRowRxToCx(row, match - row->render);
 			E.rowoff = E.numrows;
+
+			// saves prior color config
+			saved_hl_line = current;
+			saved_hl = malloc(row->size);
+			memcpy(saved_hl, row->hl, row->size);
+
+			// colors the match
+			memset(&row->hl[match - row->render], HL_MATCH, strlen(query));
 			break;
 		}
 	}
@@ -641,7 +697,31 @@ void editorDrawRows(struct abuf *ab) {
 			int len = E.row[filerow].rsize - E.coloff;
 			if (len < 0) len = 0;
 			if (len > E.screencols) len = E.screencols;
-			abAppend(ab, &E.row[filerow].render[E.coloff], len);
+			// storing row to be rendered and highlighting info
+			char *c = &E.row[filerow].render[E.coloff];
+			unsigned char *hl = &E.row[filerow].hl[E.coloff];
+			int current_color = -1;
+			int j;
+			// looping through characters in row to change color of digits
+			for (j = 0; j < len; j++) {
+				if (hl[j] == HL_NORMAL) {
+					if (current_color != -1) {
+						abAppend(ab, "\x1b[39m", 5);
+						current_color = -1;
+					}
+					abAppend(ab, &c[j], 1);
+				} else {
+					int color = editorSyntaxToColor(hl[j]);
+					if (color != current_color) {
+						current_color = color;
+						char buf[16];
+						int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", color);
+						abAppend(ab, buf, clen);
+					}
+					abAppend(ab, &c[j], 1);
+				}
+			}
+			abAppend(ab, "\x1b[39m", 5);
 		}
 
 		// clearing the line
