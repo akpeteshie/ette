@@ -225,18 +225,36 @@ int getWindowSize(int *rows, int *cols) {
 
 /*** syntax highlighting ***/
 
+// function that identifies separator characters
+int is_separator(int c){
+        return isspace(c) || c == '\0' || strchr(",.()+-/*=~%<>[];", c) != NULL;
+}
+
 // function that assigns highlight value to all row chars
 void editorUpdateSyntax(erow *row) {
 	// makes a length copy of row and populates each char index with color
 	row->hl = realloc(row->hl, row->rsize);
 	memset(row->hl, HL_NORMAL, row->rsize);
 
+        // tracks whether previous char was a separator
+        int prev_sep = 1;
+
 	// iterates through chars in row and assigns all digits a color index
-	int i;
-	for (i = 0; i < row->rsize; i++) {
-		if (isdigit(row->render[i])) {
+	int i = 0;
+        while (i < row->size) {
+                char c = row->render[i];
+                // stores prev char highlighting
+                unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL;
+
+		if ((isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || (c == '.' && prev_hl == HL_NUMBER)) {
 			row->hl[i] = HL_NUMBER;
+                        i++;
+                        prev_sep = 0;
+                        continue;
 		}
+
+                prev_sep = is_separator(c);
+                i++;
 	}
 }
 
